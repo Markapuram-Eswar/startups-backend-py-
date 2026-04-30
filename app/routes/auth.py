@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -72,7 +72,7 @@ async def login(body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/login/request-otp")
-async def request_login_otp(body: dict, db: Session = Depends(get_db)):
+async def request_login_otp(body: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     email = body.get("email")
     password = body.get("password")
     if not email or not password:
@@ -89,14 +89,8 @@ async def request_login_otp(body: dict, db: Session = Depends(get_db)):
     user.login_otp_expires_at = datetime.utcnow() + timedelta(milliseconds=OTP_TTL_MS)
     db.add(user)
     db.commit()
-    try:
-        send_email_with_template(user.email, "login_otp", {"otp": otp})
-        return {"message": "OTP sent to your email", "otpRequired": True}
-    except Exception as mail_err:
-        print("Mail error:", mail_err)
-        if settings.show_otp_in_response:
-            return {"message": "Mail failed. OTP generated, check server logs.", "otpRequired": True}
-        raise HTTPException(status_code=500, detail={"message": "Failed to send OTP email"})
+    background_tasks.add_task(send_email_with_template, user.email, "login_otp", {"otp": otp})
+    return {"message": "OTP sent to your email", "otpRequired": True}
 
 
 @router.post("/login/verify-otp")
@@ -135,7 +129,7 @@ async def verify_login_otp(body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/forgot-password/request-otp")
-async def request_password_reset_otp(body: dict, db: Session = Depends(get_db)):
+async def request_password_reset_otp(body: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     email = body.get("email")
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user:
@@ -147,14 +141,8 @@ async def request_password_reset_otp(body: dict, db: Session = Depends(get_db)):
     user.reset_otp_expires_at = datetime.utcnow() + timedelta(milliseconds=RESET_OTP_TTL_MS)
     db.add(user)
     db.commit()
-    try:
-        send_email_with_template(user.email, "reset_otp", {"otp": otp})
-        return {"message": "Reset OTP sent"}
-    except Exception as mail_err:
-        print("reset OTP mail error:", mail_err)
-        if settings.show_otp_in_response:
-            return {"message": "Mail failed. Reset OTP generated, check server logs."}
-        raise HTTPException(status_code=500, detail={"message": "Failed to send reset OTP email"})
+    background_tasks.add_task(send_email_with_template, user.email, "reset_otp", {"otp": otp})
+    return {"message": "Reset OTP sent"}
 
 
 @router.post("/forgot-password/reset")
@@ -184,7 +172,7 @@ async def reset_password(body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/force-reset-password/request-otp")
-async def request_force_reset_otp(user: TokenUser = Depends(protect), db: Session = Depends(get_db)):
+async def request_force_reset_otp(background_tasks: BackgroundTasks, user: TokenUser = Depends(protect), db: Session = Depends(get_db)):
     row = db.execute(select(User).where(User.id == user.id)).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail={"message": "User not found"})
@@ -195,14 +183,8 @@ async def request_force_reset_otp(user: TokenUser = Depends(protect), db: Sessio
     row.reset_otp_expires_at = datetime.utcnow() + timedelta(milliseconds=RESET_OTP_TTL_MS)
     db.add(row)
     db.commit()
-    try:
-        send_email_with_template(row.email, "reset_otp", {"otp": otp})
-        return {"message": "Verification code sent to your email"}
-    except Exception as mail_err:
-        print("force-reset OTP mail error:", mail_err)
-        if settings.show_otp_in_response:
-            return {"message": "Mail failed. OTP generated, check logs."}
-        raise HTTPException(status_code=500, detail={"message": "Failed to send verification email"})
+    background_tasks.add_task(send_email_with_template, row.email, "reset_otp", {"otp": otp})
+    return {"message": "Verification code sent to your email"}
 
 
 @router.post("/force-reset-password")
@@ -245,6 +227,7 @@ async def force_password_reset(body: dict, user: TokenUser = Depends(protect), d
 @router.post("/admin/create-user")
 async def admin_create_user(
     body: dict,
+    background_tasks: BackgroundTasks,
     admin: TokenUser = Depends(admin_only),
     db: Session = Depends(get_db),
 ):
@@ -253,10 +236,10 @@ async def admin_create_user(
     name = body.get("name")
     send_welcome = body.get("sendWelcome")
     force_password_reset = body.get("forcePasswordReset") or False
-    if not email or not password or not name:
+    if not email or not password:
         raise HTTPException(
             status_code=400,
-            detail={"message": "Email, password, and name are required"},
+            detail={"message": "Email and password are required"},
         )
     if len(password) < 6:
         raise HTTPException(status_code=400, detail={"message": "Password must be at least 6 characters"})
@@ -268,7 +251,7 @@ async def admin_create_user(
     now = datetime.utcnow()
     new_user = User(
         id=new_cuid(),
-        name=name.strip(),
+        name=name.strip() if name else None,
         email=email.strip(),
         password=pwd_context.hash(password),
         role=Role.user,
@@ -283,22 +266,16 @@ async def admin_create_user(
     db.commit()
     db.refresh(new_user)
     if send_welcome:
-        try:
-            send_email_with_template(
-                new_user.email,
-                "welcome_invitation",
-                {
-                    "name": new_user.name,
-                    "email": new_user.email,
-                    "password": password,
-                    "loginUrl": settings.frontend_url,
-                },
-            )
-            new_user.welcome_email_sent = True
-            db.add(new_user)
-            db.commit()
-        except Exception as e:
-            print("Welcome email error:", e)
+        email_data = {
+            "name": new_user.name,
+            "email": new_user.email,
+            "password": password,
+            "loginUrl": settings.frontend_url,
+        }
+        background_tasks.add_task(send_email_with_template, new_user.email, "welcome_invitation", email_data)
+        new_user.welcome_email_sent = True
+        db.add(new_user)
+        db.commit()
     return {
         "message": "User created successfully",
         "user": {

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -217,21 +217,20 @@ def apply_admin_field_edit(
     )
     db.add(n)
 
-    owner = db.get(User, startup.created_by_id)
     if owner and owner.email:
-        try:
-            send_email_with_template(
-                owner.email,
-                "admin_activity",
-                {
-                    "actionType": "edit",
-                    "userName": owner.name,
-                    "startupName": startup.name,
-                    "fieldLabel": field_label,
-                    "oldValue": str(safe_old),
-                    "newValue": safe_new,
-                    "portalUrl": f"{settings.frontend_url}/startup/{startup.id}?highlight={field_key}",
-                },
-            )
-        except Exception:
-            pass
+        email_data = {
+            "actionType": "edit",
+            "userName": owner.name,
+            "startupName": startup.name,
+            "fieldLabel": field_label,
+            "oldValue": str(safe_old),
+            "newValue": safe_new,
+            "portalUrl": f"{settings.frontend_url}/startup/{startup.id}?highlight={field_key}",
+        }
+        if background_tasks:
+            background_tasks.add_task(send_email_with_template, owner.email, "admin_activity", email_data)
+        else:
+            try:
+                send_email_with_template(owner.email, "admin_activity", email_data)
+            except Exception:
+                pass

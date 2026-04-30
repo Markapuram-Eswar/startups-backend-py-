@@ -54,29 +54,27 @@ def get_template(template_type: str, data: dict) -> tuple[str, str] | None:
 
 def send_email_with_template(to: str, template_type: str, data: dict) -> None:
     if not _configured():
-        logger.warning("Skipping email %s to %s (SMTP not configured)", template_type, to)
+        logger.warning("SMTP not configured. Skipping email %s to %s", template_type, to)
         return
-    t = get_template(template_type, data)
-    if not t:
-        raise ValueError(f"Template type {template_type!r} not found")
-    subject, html = t
-    host = settings.smtp_host
-    port = int(settings.smtp_port)
-    user = (settings.smtp_user or "").strip()
-    password = (settings.smtp_pass or "").strip()
-    from_email = (settings.smtp_from_email or user).strip()
-    from_name = (settings.smtp_from_name or "IITTNiF").strip()
+
+    tpl = get_template(template_type, data)
+    if not tpl:
+        logger.error("No template found for %s", template_type)
+        return
+
+    subject, html_content = tpl
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{from_name} <{from_email}>"
+    msg["From"] = f"{settings.smtp_from_name} <{settings.smtp_from_email}>"
     msg["To"] = to
-    msg.attach(MIMEText(html, "html"))
-    text_fallback = f"OTP/Code: {data.get('otp', '')}"
-    msg.attach(MIMEText(text_fallback, "plain"))
+    msg.attach(MIMEText(html_content, "html"))
 
-    with smtplib.SMTP(host, port) as smtp:
-        smtp.starttls()
-        smtp.login(user, password)
-        smtp.sendmail(from_email, [to], msg.as_string())
-    logger.info("Mail sent to %s (%s)", to, template_type)
+    try:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+            server.starttls()
+            server.login(settings.smtp_user, settings.smtp_pass)
+            server.send_message(msg)
+        logger.info("Email %s sent successfully to %s", template_type, to)
+    except Exception as e:
+        logger.error("Failed to send email %s to %s: %s", template_type, to, e)

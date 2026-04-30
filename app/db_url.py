@@ -17,6 +17,9 @@ def _with_sslmode_require(direct: str) -> str:
     u = urlparse(direct)
     q = dict(parse_qsl(u.query, keep_blank_values=True))
     q["sslmode"] = "require"
+    # Remove Prisma-specific 'schema' if present (causes psycopg.ProgrammingError)
+    if "schema" in q:
+        del q["schema"]
     new_query = urlencode(q)
     # SQLAlchemy: use the Psycopg 3 driver
     scheme = u.scheme
@@ -28,6 +31,17 @@ def _with_sslmode_require(direct: str) -> str:
 def get_database_url() -> str:
     direct = (settings.database_url or "").strip()
     if direct:
+        # Always ensure we use Psycopg 3 driver
+        u = urlparse(direct)
+        if u.scheme in ("postgresql", "postgres"):
+            scheme = "postgresql+psycopg"
+            # Remove Prisma-specific 'schema' from query
+            q = dict(parse_qsl(u.query, keep_blank_values=True))
+            if "schema" in q:
+                del q["schema"]
+            new_query = urlencode(q)
+            direct = urlunparse((scheme, u.netloc, u.path, u.params, new_query, u.fragment))
+        
         if _relaxed_ssl():
             try:
                 return _with_sslmode_require(direct)

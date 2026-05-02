@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -599,6 +599,7 @@ async def get_admin_comments(startup_id: str, db: Session = Depends(get_db)):
 async def add_admin_comment(
     startup_id: str,
     body: dict,
+    background_tasks: BackgroundTasks,
     admin: TokenUser = Depends(check_admin),
     db: Session = Depends(get_db),
 ):
@@ -637,21 +638,15 @@ async def add_admin_comment(
 
     owner = db.get(User, startup.created_by_id)
     if owner and owner.email:
-        try:
-            send_email_with_template(
-                owner.email,
-                "admin_activity",
-                {
-                    "actionType": "comment",
-                    "userName": owner.name,
-                    "startupName": startup.name,
-                    "fieldLabel": field_key or "General",
-                    "commentText": text,
-                    "portalUrl": f"{settings.frontend_url}/startup/{startup.id}?highlight={field_key or ''}",
-                },
-            )
-        except Exception:
-            pass
+        email_data = {
+            "actionType": "comment",
+            "userName": owner.name,
+            "startupName": startup.name,
+            "fieldLabel": field_key or "General",
+            "commentText": text,
+            "portalUrl": f"{settings.frontend_url}/startup/{startup.id}?highlight={field_key or ''}",
+        }
+        background_tasks.add_task(send_email_with_template, owner.email, "admin_activity", email_data)
 
     db.commit()
     return {"success": True, "message": "Comment added"}
@@ -681,6 +676,7 @@ async def get_edit_history(startup_id: str, db: Session = Depends(get_db)):
 async def add_edit_history(
     startup_id: str,
     body: dict,
+    background_tasks: BackgroundTasks,
     admin: TokenUser = Depends(check_admin),
     db: Session = Depends(get_db),
 ):
@@ -703,6 +699,7 @@ async def add_edit_history(
             field_label=field_label or field_key,
             new_value=new_value,
             admin_id=admin.id,
+            background_tasks=background_tasks,
         )
         db.commit()
         return {"success": True, "message": "Field updated"}

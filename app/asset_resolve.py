@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.config import settings
 from app.s3_ops import is_s3_configured, public_url_for_key
 from app.s3_presign import presign_reads_enabled, presigned_get_url_for_stored
 
@@ -68,8 +69,11 @@ async def serialize_startup_for_client_async(row_dict: dict, opts: dict | None =
         else:
             resolved = resolve_public_asset_url(raw)
             key_like = raw.lstrip("/")
+            # Only use media streaming if S3 is configured with keys (avoids 503/500 if missing)
+            has_keys = bool(settings.aws_access_key_id and settings.aws_secret_access_key)
             looks_private = ("amazonaws.com" in raw.lower()) or key_like.startswith("uploads/")
-            if looks_private and sid:
+            
+            if looks_private and sid and has_keys:
                 s["logo"] = f"/api/media/startup/{sid}/logo"
             else:
                 s["logo"] = resolved or None
@@ -89,11 +93,13 @@ async def serialize_startup_for_client_async(row_dict: dict, opts: dict | None =
                     item["url"] = signed_u
                 else:
                     resolved_u = resolve_public_asset_url(raw_u)
+                    # Only use media streaming if S3 is configured with keys
+                    has_keys = bool(settings.aws_access_key_id and settings.aws_secret_access_key)
                     kl = raw_u.lstrip("/")
                     lp = ("amazonaws.com" in raw_u.lower()) or kl.startswith("uploads/")
                     item["url"] = (
                         f"/api/media/startup/{sid}/document/{i}"
-                        if lp and sid
+                        if lp and sid and has_keys
                         else resolved_u
                     )
             new_docs.append(item)

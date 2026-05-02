@@ -15,7 +15,9 @@ def get_bucket_region() -> str:
 
 
 def is_s3_configured() -> bool:
-    return bool((settings.s3_bucket_name or "").strip())
+    has_bucket = bool((settings.s3_bucket_name or "").strip())
+    has_keys = bool((settings.aws_access_key_id or "").strip() and (settings.aws_secret_access_key or "").strip())
+    return has_bucket and has_keys
 
 
 def public_url_for_key(key: str) -> str:
@@ -32,16 +34,24 @@ def public_url_for_key(key: str) -> str:
     return f"https://{bucket}.s3.{region}.amazonaws.com/{enc_path}"
 
 
+_s3_client = None
+
 def get_s3_client():
+    global _s3_client
+    if _s3_client is not None:
+        return _s3_client
+        
     kwargs = {"region_name": get_bucket_region()}
     if settings.aws_access_key_id and settings.aws_secret_access_key:
         kwargs["aws_access_key_id"] = settings.aws_access_key_id.strip()
         kwargs["aws_secret_access_key"] = settings.aws_secret_access_key.strip()
-    return boto3.client(
+    
+    _s3_client = boto3.client(
         "s3",
         config=Config(signature_version="s3v4"),
         **kwargs,
     )
+    return _s3_client
 
 
 def put_object_bytes(*, buffer: bytes, content_type: str, key: str) -> str:

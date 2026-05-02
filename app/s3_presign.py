@@ -30,7 +30,10 @@ def get_presign_expiry_seconds() -> int:
 
 
 def presign_reads_enabled() -> bool:
-    return get_presign_expiry_seconds() > 0
+    # Only enable if bucket is set, expiry is > 0, AND we have credentials
+    has_bucket = bool((settings.s3_bucket_name or "").strip())
+    has_keys = bool(settings.aws_access_key_id and settings.aws_secret_access_key)
+    return has_bucket and has_keys and get_presign_expiry_seconds() > 0
 
 
 def extract_uploads_object_key(stored: str | None) -> str | None:
@@ -40,6 +43,10 @@ def extract_uploads_object_key(stored: str | None) -> str | None:
     bare = s.split("?")[0].lstrip("/")
     if bare.startswith("uploads/"):
         return bare
+
+    # If it's a bare filename (no slashes) and not a URL, assume it's in uploads/
+    if "/" not in bare and not s.lower().startswith(("http://", "https://")):
+        return f"uploads/{bare}"
 
     if not s.lower().startswith(("http://", "https://")):
         return None

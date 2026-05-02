@@ -7,7 +7,7 @@ from typing import Annotated, Optional
 
 import jwt
 from fastapi import Depends, Header, HTTPException, Request
-from jwt import ExpiredSignatureError, InvalidTokenError
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
